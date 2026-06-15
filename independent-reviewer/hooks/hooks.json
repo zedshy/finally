@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex exec 'Review all changes since the last commit and write a comprehensive review to planning/REVIEW.md, organised by severity (High / Medium / Low) with a brief summary at the top.'"
+          }
+        ]
+      }
+    ]
+  }
+}
