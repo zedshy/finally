@@ -1,62 +1,55 @@
 # FinAlly — AI Trading Workstation
 
-A visually stunning AI-powered trading workstation that streams live market data, simulates portfolio trading, and integrates an LLM chat assistant that can analyze positions and execute trades via natural language.
+A visually stunning AI-powered trading workstation with live market data, simulated portfolio trading, and an LLM chat assistant that can analyze positions and execute trades on your behalf. Think Bloomberg terminal with an AI copilot.
 
-Built entirely by coding agents as a capstone project for an agentic AI coding course.
+Built as the capstone project for an agentic AI coding course — constructed entirely by orchestrated AI coding agents.
 
-## Features
+## What It Does
 
-- **Live price streaming** via SSE with green/red flash animations
-- **Simulated portfolio** — $10k virtual cash, market orders, instant fills
-- **Portfolio visualizations** — heatmap (treemap), P&L chart, positions table
-- **AI chat assistant** — analyzes holdings, suggests and auto-executes trades
-- **Watchlist management** — track tickers manually or via AI
-- **Dark terminal aesthetic** — Bloomberg-inspired, data-dense layout
+- **Live price streaming** — prices flash green/red on every tick via SSE
+- **Simulated portfolio** — start with $10,000 virtual cash, buy and sell at market price instantly
+- **Portfolio visualizations** — treemap heatmap by P&L weight, P&L chart over time, positions table
+- **AI chat assistant** — ask questions, get analysis, have the AI execute trades and manage your watchlist via natural language
+- **Watchlist management** — add/remove tickers manually or through the AI
 
 ## Architecture
 
-Single Docker container serving everything on port 8000:
+Single Docker container, single port (8000):
 
-- **Frontend**: Next.js (static export) with TypeScript and Tailwind CSS
-- **Backend**: FastAPI (Python/uv) with SSE streaming
-- **Database**: SQLite with lazy initialization
+- **Frontend**: Next.js (TypeScript), static export served by FastAPI
+- **Backend**: FastAPI (Python/uv)
+- **Database**: SQLite — zero config, auto-initialized on first run
+- **Real-time**: Server-Sent Events (`/api/stream/prices`)
 - **AI**: LiteLLM → OpenRouter (Cerebras inference) with structured outputs
-- **Market data**: Built-in GBM simulator (default) or Massive API (optional)
+- **Market data**: GBM simulator by default; Polygon.io REST API if `MASSIVE_API_KEY` is set
 
-## Quick Start
+## Quick Start (Current State)
+
+The full app (Docker container, backend API, frontend, AI chat) is still under construction — see Development Status below. The market data module is complete and can be explored directly:
 
 ```bash
-# Clone and configure
-cp .env.example .env
-# Add your OPENROUTER_API_KEY to .env
-
-# Run with Docker
-docker build -t finally .
-docker run -v finally-data:/app/db -p 8000:8000 --env-file .env finally
-
-# Open http://localhost:8000
+cd backend
+uv sync
+uv run market_data_demo.py   # live terminal demo with sparklines and event log
+uv run pytest                 # run the test suite
 ```
 
 ## Environment Variables
 
+Planned configuration for the full app (not yet wired up):
+
 | Variable | Required | Description |
 |---|---|---|
-| `OPENROUTER_API_KEY` | Yes | OpenRouter API key for AI chat |
-| `MASSIVE_API_KEY` | No | Massive (Polygon.io) key for real market data; omit to use simulator |
-| `LLM_MOCK` | No | Set `true` for deterministic mock LLM responses (testing) |
+| `OPENROUTER_API_KEY` | Yes | For LLM chat (OpenRouter) |
+| `MASSIVE_API_KEY` | No | Polygon.io key for real market data; omit to use the simulator |
+| `LLM_MOCK` | No | Set `true` for deterministic mock responses (E2E tests) |
 
-## Project Structure
+## Development Status
 
-```
-finally/
-├── frontend/    # Next.js static export
-├── backend/     # FastAPI uv project
-├── planning/    # Project documentation and agent contracts
-├── test/        # Playwright E2E tests
-├── db/          # SQLite volume mount (runtime)
-└── scripts/     # Start/stop helpers
-```
-
-## License
-
-See [LICENSE](LICENSE).
+| Component | Status |
+|---|---|
+| Market data (simulator + Polygon.io) | Complete — 73 tests, 84% coverage |
+| Backend API & database | In progress |
+| Frontend UI | In progress |
+| Docker & deployment | In progress |
+| E2E tests | In progress |

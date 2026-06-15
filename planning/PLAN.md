@@ -155,6 +155,8 @@ Both the simulator and the Massive client implement the same abstract interface.
 - Occasional random "events" — sudden 2-5% moves on a ticker for drama
 - Starts from realistic seed prices (e.g., AAPL ~$190, GOOGL ~$175, etc.)
 - Runs as an in-process background task — no external dependencies
+- **Dynamic ticker support**: when a ticker is added to the watchlist, the simulator immediately begins generating prices for it. If the ticker has a known seed price (the default 10), that is used; otherwise a default of $100 is used with standard GBM parameters.
+- **Daily change tracking**: each ticker tracks an `open_price`, initialized to its seed price at startup and reset to the current price every 24 hours. Daily change % displayed in the UI is `(current_price - open_price) / open_price * 100`.
 
 ### Massive API (Optional)
 
@@ -168,6 +170,7 @@ Both the simulator and the Massive client implement the same abstract interface.
 
 - A single background task (simulator or Massive poller) writes to an in-memory price cache
 - The cache holds the latest price, previous price, and timestamp for each ticker
+- The cache also maintains a rolling history buffer of the last 120 price points (~60 seconds) per ticker, used to seed sparklines on SSE connection and reconnection
 - SSE streams read from this cache and push updates to connected clients
 - This architecture supports future multi-user scenarios without changes to the data layer
 
@@ -175,8 +178,10 @@ Both the simulator and the Massive client implement the same abstract interface.
 
 - Endpoint: `GET /api/stream/prices`
 - Long-lived SSE connection; client uses native `EventSource` API
-- Server pushes price updates for all tickers known to the system at a regular cadence (~500ms) — in the single-user model this is equivalent to the user's watchlist
-- Each SSE event contains ticker, price, previous price, timestamp, and change direction
+- Server streams prices for all tickers that are either on the watchlist **or** have a held position (quantity > 0) — this ensures portfolio P&L calculations always have current prices even for tickers removed from the watchlist
+- On connection, the server first sends an `init` event containing the rolling history buffer for all active tickers (up to 120 points each), so sparklines populate immediately and survive reconnections without gaps
+- After the `init` burst, the server pushes live price updates at ~500ms cadence
+- Each SSE price event contains: ticker, price, previous price, timestamp, change direction, daily change %
 - Client handles reconnection automatically (EventSource has built-in retry)
 
 ---
@@ -225,7 +230,7 @@ All tables include a `user_id` column defaulting to `"default"`. This is hardcod
 - `price` REAL
 - `executed_at` TEXT (ISO timestamp)
 
-**portfolio_snapshots** — Portfolio value over time (for P&L chart). Recorded every 30 seconds by a background task, and immediately after each trade execution.
+**portfolio_snapshots** — Portfolio value over time (for P&L chart). An initial snapshot is written at startup/seeding time so the chart is never blank on first launch. Subsequently recorded every 30 seconds by a background task, and immediately after each trade execution.
 - `id` TEXT PRIMARY KEY (UUID)
 - `user_id` TEXT (default: `"default"`)
 - `total_value` REAL
@@ -290,9 +295,9 @@ There is an OPENROUTER_API_KEY in the .env file in the project root.
 When the user sends a chat message, the backend:
 
 1. Loads the user's current portfolio context (cash, positions with P&L, watchlist with live prices, total portfolio value)
-2. Loads recent conversation history from the `chat_messages` table
+2. Loads the last 20 messages from `chat_messages` (10 exchanges). This cap keeps token usage predictable while providing sufficient context; it comfortably fits within the model's context window alongside the portfolio context.
 3. Constructs a prompt with a system message, portfolio context, conversation history, and the user's new message
-4. Calls the LLM via LiteLLM → OpenRouter, requesting structured output, using the cerebras-inference skill
+4. Calls the LLM via LiteLLM → OpenRouter, requesting structured output
 5. Parses the complete structured JSON response
 6. Auto-executes any trades or watchlist changes specified in the response
 7. Stores the message and executed actions in `chat_messages`
@@ -309,14 +314,15 @@ The LLM is instructed to respond with JSON matching this schema:
     {"ticker": "AAPL", "side": "buy", "quantity": 10}
   ],
   "watchlist_changes": [
-    {"ticker": "PYPL", "action": "add"}
+    {"ticker": "PYPL", "action": "add"},
+    {"ticker": "NFLX", "action": "remove"}
   ]
 }
 ```
 
 - `message` (required): The conversational text shown to the user
 - `trades` (optional): Array of trades to auto-execute. Each trade goes through the same validation as manual trades (sufficient cash for buys, sufficient shares for sells)
-- `watchlist_changes` (optional): Array of watchlist modifications
+- `watchlist_changes` (optional): Array of watchlist modifications. Valid `action` values are `"add"` and `"remove"` exactly.
 
 ### Auto-Execution
 
@@ -339,10 +345,20 @@ The LLM should be prompted as "FinAlly, an AI trading assistant" with instructio
 
 ### LLM Mock Mode
 
-When `LLM_MOCK=true`, the backend returns deterministic mock responses instead of calling OpenRouter. This enables:
-- Fast, free, reproducible E2E tests
-- Development without an API key
-- CI/CD pipelines
+When `LLM_MOCK=true`, the backend returns the following deterministic response instead of calling OpenRouter. This enables fast, free, reproducible E2E tests and CI/CD pipelines without an API key.
+
+**Fixed mock response:**
+```json
+{
+  "message": "I've bought 2 shares of AAPL for your portfolio. This gives you exposure to Apple at the current market price.",
+  "trades": [
+    {"ticker": "AAPL", "side": "buy", "quantity": 2}
+  ],
+  "watchlist_changes": []
+}
+```
+
+E2E tests can assert against this exact shape: after sending any chat message in mock mode, AAPL should appear (or increase) in the positions table and cash should decrease accordingly.
 
 ---
 
@@ -357,7 +373,7 @@ The frontend is a single-page application with a dense, terminal-inspired layout
 - **Portfolio heatmap** — treemap visualization where each rectangle is a position, sized by portfolio weight, colored by P&L (green = profit, red = loss)
 - **P&L chart** — line chart showing total portfolio value over time, using data from `portfolio_snapshots`
 - **Positions table** — tabular view of all positions: ticker, quantity, avg cost, current price, unrealized P&L, % change
-- **Trade bar** — simple input area: ticker field, quantity field, buy button, sell button. Market orders, instant fill.
+- **Trade bar** — simple input area: ticker field, quantity field (fractional quantities supported, e.g. `0.5`), buy button, sell button. Market orders, instant fill. The ticker field should validate against the current watchlist — if the entered ticker is not on the watchlist, show an inline error before submitting. Backend errors (insufficient cash, insufficient shares) are displayed inline after submission.
 - **AI chat panel** — docked/collapsible sidebar. Message input, scrolling conversation history, loading indicator while waiting for LLM response. Trade executions and watchlist changes shown inline as confirmations.
 - **Header** — portfolio total value (updating live), connection status indicator, cash balance
 
